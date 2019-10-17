@@ -88,7 +88,6 @@ int main(int argc, char *argv[]) {
     pthread_t readers[500];
     int reads;
     int writes;
-    int status;
 
     if (argc != 3) {
         puts("Invalid number of arguments");
