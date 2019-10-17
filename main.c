@@ -56,14 +56,89 @@ static void *reader_thread(void *repeat_count) {
     struct timespec start_time;
     struct timespec end_time;
 
-    if (sem_wait(&r_mutex) == -1) exit(EXIT_FAILURE);
+    for (int i = 0; i < loops; i++) {
+        clock_gettime(CLOCK_REALTIME, &start_time);
+        if (sem_wait(&r_mutex) == -1) exit(EXIT_FAILURE);
 
-    r_count++;
-    if (r_count)
+        r_count++;
+        if (r_count == 1)
+            sem_wait(&rw_mutex);
+
+        clock_gettime(CLOCK_REALTIME, &end_time);
+        update_wait_data(&start_time, &end_time);
+
+        sem_post(&r_mutex);
+
+        global;//read performed
+
+        sem_wait(&r_mutex);
+        r_count--;
+
+        if (r_count == 0)
+            sem_post(&rw_mutex);
+
+        sem_post(&r_mutex);
+        //wait before trying to gain access again
+        usleep((random() % 101) * 1000);
+    }
 }
 
-int main() {
-    printf("long long : %lu \t long: %lu\n", sizeof(unsigned long long), sizeof(long));
+int main(int argc, char *argv[]) {
+    pthread_t writers[10];
+    pthread_t readers[500];
+    int reads;
+    int writes;
+    int status;
+
+    if (argc != 3) {
+        puts("Invalid number of arguments");
+        exit(EXIT_FAILURE);
+    }
+    reads = atoi(argv[1]);
+    writes = atoi(argv[2]);
+
+    //initialize mutexes
+    if(sem_init(&rw_mutex, 0, 1) == -1) {
+        puts("Failed to initialize rw_mutex");
+        exit(EXIT_FAILURE);
+    }
+    if(sem_init(&r_mutex, 0, 1) == -1) {
+        puts("Failed to initialize r_mutex");
+        exit(EXIT_FAILURE);
+    }
+
+    //initialize writers
+    for (int i = 0; i < 10; ++i) {
+        if (pthread_create(&writers[i], NULL, writer_thread, &writes) != 0) {
+            puts("Error creating writer thread");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    //initialize readers
+    for (int i = 0; i < 500; ++i) {
+        if (pthread_create(&readers[i], NULL, reader_thread, &reads) != 0) {
+            puts("Error creating reader thread");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    //join writers
+    for (int i = 0; i < 10; ++i) {
+        if(pthread_join(writers[i], NULL) != 0) {
+            puts("Error joining writers");
+        }
+    }
+    //join readers
+    for (int i = 0; i < 500; ++i) {
+        if(pthread_join(readers[i], NULL) != 0) {
+            puts("Error joining readers");
+        }
+    }
+
+    printf("global: %d\tMin: %ld\tMean: %ld\tMax: %ld",
+            global, min_wait_time, sum_wait_time/count_wait_time, max_wait_time);
+
     return 0;
 }
 
