@@ -19,9 +19,9 @@ static unsigned long sum_wait_time = 0;
 static unsigned long count_wait_time = 0;
 
 static void update_wait_data(struct timespec *start_time, struct timespec *end_time) {
-    time_t sec_diff = ((*end_time).tv_sec - (*start_time).tv_sec) * 1000;
-    long ms_diff = ((*end_time).tv_nsec - (*start_time).tv_nsec) / 1000000;
-    long wait_time = sec_diff + ms_diff;
+    time_t sec_diff = (*end_time).tv_sec - (*start_time).tv_sec;
+    long ns_diff = (*end_time).tv_nsec - (*start_time).tv_nsec;
+    long wait_time = (sec_diff * 1000000000) + (ns_diff);
 
     //update min and max times
     if (wait_time < min_wait_time) min_wait_time = wait_time;
@@ -45,8 +45,7 @@ static void *writer_thread(void *repeat_count) {
         global += 10;
 
         if (sem_post(&rw_mutex) == -1) exit(EXIT_FAILURE);
-
-        //wait before trying to gain access again
+        //sleep
         usleep((random() % 101) * 1000);
     }
 }
@@ -74,18 +73,19 @@ static void *reader_thread(void *repeat_count) {
         sem_wait(&r_mutex);
         r_count--;
 
-        if (r_count == 0)
+        if (r_count == 0) {
             sem_post(&rw_mutex);
+        }
 
         sem_post(&r_mutex);
-        //wait before trying to gain access again
+        //sleep
         usleep((random() % 101) * 1000);
     }
 }
 
 int main(int argc, char *argv[]) {
-    pthread_t writers[10];
     pthread_t readers[500];
+    pthread_t writers[10];
     int reads;
     int writes;
 
