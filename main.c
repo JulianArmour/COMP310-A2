@@ -51,18 +51,17 @@ static void *WriterThread(void *repeat_count) {
   int loops = *((int *) repeat_count);
   struct timespec start_time;
   struct timespec end_time;
+  //data for this thread's waiting time
   WaitTime writer_thread_data = {ULLONG_MAX, 0, 0, 0};
 
   for (int i = 0; i < loops; i++) {
     clock_gettime(CLOCK_REALTIME, &start_time);
 //    sem_wait(&thread_queue);
-    sem_wait(&global_mutex);
+    sem_wait(&global_mutex);//ENTERING global_mutex CRITICAL SECTION
 //    sem_post(&thread_queue);
-
-    //ENTERING CRITICAL SECTION
     global += 10;
-    //EXITING CRITICAL SECTION
-    sem_post(&global_mutex);
+    sem_post(&global_mutex);//EXITING global_mutex CRITICAL SECTION
+
     //update this thread's data with this loop's wait time
     clock_gettime(CLOCK_REALTIME, &end_time);
     UpdateWaitTimeData(&start_time, &end_time, &writer_thread_data);
@@ -81,31 +80,35 @@ static void *ReaderThread(void *repeat_count) {
   int loops = *((int *) repeat_count);
   struct timespec start_time;
   struct timespec end_time;
+  //data for this thread's waiting time
+  WaitTime reader_thread_data = {ULLONG_MAX, 0, 0, 0};
 
   for (int i = 0; i < loops; i++) {
     clock_gettime(CLOCK_REALTIME, &start_time);
 //    sem_wait(&thread_queue);//wait in thread queue
-    sem_wait(&r_count_mutex);//wait for access to r_count
+    sem_wait(&r_count_mutex);//ENTERING r_count CRITICAL SECTION
 //    sem_post(&thread_queue);
-    //ENTERING r_count CRITICAL SECTION
     r_count++;
     if (r_count == 1)
-      sem_wait(&global_mutex);
-    clock_gettime(CLOCK_REALTIME, &end_time);
-    UpdateWaitTimeData(&start_time, &end_time, &reader_data);
-    //EXITING r_count CRITICAL SECTION
-    sem_post(&r_count_mutex);
+      sem_wait(&global_mutex);//writer done, take lock and start reading
+    sem_post(&r_count_mutex);//EXITING r_count CRITICAL SECTION
     global;//read performed
-    sem_wait(&r_count_mutex);
-    //ENTERING r_count CRITICAL SECTION
+    sem_wait(&r_count_mutex);//ENTERING r_count CRITICAL SECTION
     r_count--;
     if (r_count == 0)
-      sem_post(&global_mutex);
-    //EXITING r_count CRITICAL SECTION
-    sem_post(&r_count_mutex);
+      sem_post(&global_mutex);//readers done, give lock to a writer
+    sem_post(&r_count_mutex);//EXITING r_count CRITICAL SECTION
+
+    //update this thread's data with this loop's wait time
+    clock_gettime(CLOCK_REALTIME, &end_time);
+    UpdateWaitTimeData(&start_time, &end_time, &reader_thread_data);
     //sleep before trying to get access again
-//    usleep((random() % 101) * 1000);
+    usleep((random() % 101) * 1000);
   }
+  //update the global reader_data
+  sem_wait(&rw_data_mutex);
+  UpdateGlobalReadWriteData(&reader_thread_data, &reader_data);
+  sem_post(&rw_data_mutex);
 }
 
 int main(int argc, char *argv[]) {
