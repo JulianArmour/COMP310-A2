@@ -6,76 +6,83 @@
 #include <time.h>
 #include <limits.h>
 
+typedef struct WaitTime {
+    unsigned long min_wait_time;
+    unsigned long max_wait_time;
+    unsigned long sum_wait_time;
+    unsigned long count_wait_time;
+} WaitTime;
+
+static sem_t thread_queue;
 static sem_t global_mutex;
 static sem_t r_count_mutex;
-//only updated when r_count_mutex is locked
-static int r_count = 0;
-//only updated when global_mutex is locked
 static int global = 0;
-//only updated when global_mutex is locked in writer_thread()
-//or when global_mutex and r_count_mutex is are both locked in reader_thread()
-static unsigned long min_wait_time = ULLONG_MAX;
-static unsigned long max_wait_time = 0;
-static unsigned long sum_wait_time = 0;
-static unsigned long count_wait_time = 0;
+static int r_count = 0;
+// Only updated when global_mutex is locked in WriterThread()
+static WaitTime writer_data = {ULLONG_MAX, 0, 0, 0};
+// Only updated when global_mutex and r_count_mutex is are both locked in ReaderThread()
+static WaitTime reader_data = {ULLONG_MAX, 0, 0, 0};
 
-static void update_wait_data(struct timespec *start_time, struct timespec *end_time) {
+static void UpdateWaitTimeData(struct timespec *start_time, struct timespec *end_time, WaitTime *data) {
   time_t sec_diff = (*end_time).tv_sec - (*start_time).tv_sec;
   long ns_diff = (*end_time).tv_nsec - (*start_time).tv_nsec;
   long wait_time = (sec_diff * 1000000000) + (ns_diff);
-
-  //update min and max times
-  if (wait_time < min_wait_time) min_wait_time = wait_time;
-  if (wait_time > max_wait_time) max_wait_time = wait_time;
-  sum_wait_time += wait_time;
-  count_wait_time++;
+  // Update min and max times
+  if (wait_time < data->min_wait_time) data->min_wait_time = wait_time;
+  if (wait_time > data->max_wait_time) data->max_wait_time = wait_time;
+  // Update running sum of wait times
+  data->sum_wait_time += wait_time;
+  data->count_wait_time++;
 }
 
-static void *writer_thread(void *repeat_count) {
+static void *WriterThread(void *repeat_count) {
   int loops = *((int *) repeat_count);
   struct timespec start_time;
   struct timespec end_time;
 
   for (int i = 0; i < loops; i++) {
-
     clock_gettime(CLOCK_REALTIME, &start_time);
+    sem_wait(&thread_queue);
     sem_wait(&global_mutex);
+    sem_post(&thread_queue);
     //ENTERING CRITICAL SECTION
     clock_gettime(CLOCK_REALTIME, &end_time);
-    update_wait_data(&start_time, &end_time);
+    UpdateWaitTimeData(&start_time, &end_time, &writer_data);
     global += 10;
     //EXITING CRITICAL SECTION
     sem_post(&global_mutex);
-    //sleep
+    //sleep before trying to get access again
     usleep((random() % 101) * 1000);
   }
 }
 
-static void *reader_thread(void *repeat_count) {
+static void *ReaderThread(void *repeat_count) {
   int loops = *((int *) repeat_count);
   struct timespec start_time;
   struct timespec end_time;
 
   for (int i = 0; i < loops; i++) {
     clock_gettime(CLOCK_REALTIME, &start_time);
-    sem_wait(&r_count_mutex);
-    //ENTERING CRITICAL SECTION
+    sem_wait(&thread_queue);//wait in thread queue
+    sem_wait(&r_count_mutex);//wait for access to r_count
+    sem_post(&thread_queue);
+    //ENTERING r_count CRITICAL SECTION
     r_count++;
     if (r_count == 1)
       sem_wait(&global_mutex);
     clock_gettime(CLOCK_REALTIME, &end_time);
-    update_wait_data(&start_time, &end_time);
-    //EXITING CRITICAL SECTION
+    UpdateWaitTimeData(&start_time, &end_time, &reader_data);
+    //EXITING r_count CRITICAL SECTION
     sem_post(&r_count_mutex);
     global;//read performed
     sem_wait(&r_count_mutex);
-    //ENTERING CRITICAL SECTION
+    //ENTERING r_count CRITICAL SECTION
     r_count--;
     if (r_count == 0)
       sem_post(&global_mutex);
-    //EXITING CRITICAL SECTION
+    //EXITING r_count CRITICAL SECTION
     sem_post(&r_count_mutex);
-    //sleep
+    //sleep before trying to get access again
     usleep((random() % 101) * 1000);
   }
 }
@@ -83,17 +90,17 @@ static void *reader_thread(void *repeat_count) {
 int main(int argc, char *argv[]) {
   pthread_t readers[500];
   pthread_t writers[10];
-  int reads;
-  int writes;
+  int read_loops;
+  int write_loops;
 
   if (argc != 3) {
     puts("Invalid number of arguments");
     exit(EXIT_FAILURE);
   }
-  reads = atoi(argv[1]);
-  writes = atoi(argv[2]);
+  read_loops = atoi(argv[1]);
+  write_loops = atoi(argv[2]);
 
-  //initialize mutexes
+  //initialize semaphores
   if (sem_init(&global_mutex, 0, 1) == -1) {
     puts("Failed to initialize global_mutex");
     exit(EXIT_FAILURE);
@@ -102,21 +109,26 @@ int main(int argc, char *argv[]) {
     puts("Failed to initialize r_count_mutex");
     exit(EXIT_FAILURE);
   }
-
-  //initialize writers
-  for (int i = 0; i < 10; ++i) {
-    if (pthread_create(&writers[i], NULL, writer_thread, &writes) != 0) {
-      puts("Error creating writer thread");
-      exit(EXIT_FAILURE);
-    }
+  if (sem_init(&thread_queue, 0, 1) == -1) {
+    puts("Failed to initialize thread_queue");
+    exit(EXIT_FAILURE);
   }
+
   //initialize readers
   for (int i = 0; i < 500; ++i) {
-    if (pthread_create(&readers[i], NULL, reader_thread, &reads) != 0) {
+    if (pthread_create(&readers[i], NULL, ReaderThread, &read_loops) != 0) {
       puts("Error creating reader thread");
       exit(EXIT_FAILURE);
     }
   }
+  //initialize writers
+  for (int i = 0; i < 10; ++i) {
+    if (pthread_create(&writers[i], NULL, WriterThread, &write_loops) != 0) {
+      puts("Error creating writer thread");
+      exit(EXIT_FAILURE);
+    }
+  }
+
   //join writers
   for (int i = 0; i < 10; ++i) {
     if (pthread_join(writers[i], NULL) != 0) {
@@ -132,8 +144,12 @@ int main(int argc, char *argv[]) {
   //destroy semaphores
   sem_destroy(&global_mutex);
   sem_destroy(&r_count_mutex);
-  printf("global: %d\tMin: %ld\tMean: %ld\tMax: %ld",
-         global, min_wait_time, sum_wait_time / count_wait_time, max_wait_time);
+  sem_destroy(&thread_queue);
+  printf("global: %d\n", global);
+  printf("Readers: Min: %ld ns, Mean: %ld ns, Max: %ld ns\n",
+         reader_data.min_wait_time, reader_data.sum_wait_time / reader_data.count_wait_time, reader_data.max_wait_time);
+  printf("Writers: Min: %ld ns, Mean: %ld ns, Max: %ld ns\n",
+         writer_data.min_wait_time, writer_data.sum_wait_time / writer_data.count_wait_time, writer_data.max_wait_time);
   return 0;
 }
 
