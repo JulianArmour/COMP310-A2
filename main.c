@@ -25,19 +25,19 @@ static WaitTime writer_data = {ULLONG_MAX, 0, 0, 0};
 static WaitTime reader_data = {ULLONG_MAX, 0, 0, 0};
 
 // Used to update either global writer_data or reader_data with thread-specific data
-void UpdateGlobalReadWriteData(WaitTime *writer_thread_data, WaitTime *global_data) {
-  if (writer_thread_data->min_wait_time < global_data->min_wait_time)
-    global_data->min_wait_time = writer_thread_data->min_wait_time;
-  if (writer_thread_data->max_wait_time > global_data->max_wait_time)
-    global_data->max_wait_time = writer_thread_data->max_wait_time;
-  global_data->sum_wait_time += writer_thread_data->sum_wait_time;
-  global_data->count_wait_time += writer_thread_data->count_wait_time;
+void UpdateGlobalReadWriteData(WaitTime *thread_data, WaitTime *global_data) {
+  if (thread_data->min_wait_time < global_data->min_wait_time)
+    global_data->min_wait_time = thread_data->min_wait_time;
+  if (thread_data->max_wait_time > global_data->max_wait_time)
+    global_data->max_wait_time = thread_data->max_wait_time;
+  global_data->sum_wait_time += thread_data->sum_wait_time;
+  global_data->count_wait_time += thread_data->count_wait_time;
 }
 
 // Used to update thread-specific benchmarking data on each iteration
 static void UpdateWaitTimeData(struct timespec *start_time, struct timespec *end_time, WaitTime *data) {
-  time_t sec_diff = (*end_time).tv_sec - (*start_time).tv_sec;
-  long ns_diff = (*end_time).tv_nsec - (*start_time).tv_nsec;
+  time_t sec_diff = end_time->tv_sec - start_time->tv_sec;
+  long ns_diff = end_time->tv_nsec - start_time->tv_nsec;
   long wait_time = (sec_diff * 1000000000) + (ns_diff);
   // Update min and max times
   if (wait_time < data->min_wait_time) data->min_wait_time = wait_time;
@@ -93,14 +93,15 @@ static void *ReaderThread(void *repeat_count) {
       sem_wait(&global_mutex);//writer done, take lock and start reading
     sem_post(&r_count_mutex);//EXITING r_count CRITICAL SECTION
     global;//read performed
+    clock_gettime(CLOCK_REALTIME, &end_time);
     sem_wait(&r_count_mutex);//ENTERING r_count CRITICAL SECTION
     r_count--;
-    if (r_count == 0)
-      sem_post(&global_mutex);//readers done, give lock to a writer
+    if (r_count == 0) {
+      sem_post(&global_mutex);
+    }//readers done, give lock to a writer
     sem_post(&r_count_mutex);//EXITING r_count CRITICAL SECTION
 
     //update this thread's data with this loop's wait time
-    clock_gettime(CLOCK_REALTIME, &end_time);
     UpdateWaitTimeData(&start_time, &end_time, &reader_thread_data);
     //sleep before trying to get access again
     usleep((random() % 101) * 1000);
