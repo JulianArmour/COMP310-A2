@@ -16,6 +16,7 @@ typedef struct WaitTime {
 static sem_t thread_queue;
 static sem_t global_mutex;
 static sem_t r_count_mutex;
+static sem_t rw_data_mutex;//for writer_data and reader_data
 static int global = 0;
 static int r_count = 0;
 // Only updated when global_mutex is locked in WriterThread()
@@ -23,6 +24,17 @@ static WaitTime writer_data = {ULLONG_MAX, 0, 0, 0};
 // Only updated when global_mutex and r_count_mutex is are both locked in ReaderThread()
 static WaitTime reader_data = {ULLONG_MAX, 0, 0, 0};
 
+// Used to update either global writer_data or reader_data with thread-specific data
+void UpdateGlobalReadWriteData(WaitTime *writer_thread_data, WaitTime *global_data) {
+  if (writer_thread_data->min_wait_time < global_data->min_wait_time)
+    global_data->min_wait_time = writer_thread_data->min_wait_time;
+  if (writer_thread_data->max_wait_time > global_data->max_wait_time)
+    global_data->max_wait_time = writer_thread_data->max_wait_time;
+  global_data->sum_wait_time += writer_thread_data->sum_wait_time;
+  global_data->count_wait_time += writer_thread_data->count_wait_time;
+}
+
+// Used to update thread-specific benchmarking data on each iteration
 static void UpdateWaitTimeData(struct timespec *start_time, struct timespec *end_time, WaitTime *data) {
   time_t sec_diff = (*end_time).tv_sec - (*start_time).tv_sec;
   long ns_diff = (*end_time).tv_nsec - (*start_time).tv_nsec;
@@ -39,22 +51,31 @@ static void *WriterThread(void *repeat_count) {
   int loops = *((int *) repeat_count);
   struct timespec start_time;
   struct timespec end_time;
+  WaitTime writer_thread_data = {ULLONG_MAX, 0, 0, 0};
 
   for (int i = 0; i < loops; i++) {
     clock_gettime(CLOCK_REALTIME, &start_time);
-    sem_wait(&thread_queue);
+//    sem_wait(&thread_queue);
     sem_wait(&global_mutex);
-    sem_post(&thread_queue);
+//    sem_post(&thread_queue);
+
     //ENTERING CRITICAL SECTION
-    clock_gettime(CLOCK_REALTIME, &end_time);
-    UpdateWaitTimeData(&start_time, &end_time, &writer_data);
     global += 10;
     //EXITING CRITICAL SECTION
     sem_post(&global_mutex);
+    //update this thread's data with this loop's wait time
+    clock_gettime(CLOCK_REALTIME, &end_time);
+    UpdateWaitTimeData(&start_time, &end_time, &writer_thread_data);
     //sleep before trying to get access again
     usleep((random() % 101) * 1000);
   }
+  //update the global writer_data
+  sem_wait(&rw_data_mutex);
+  UpdateGlobalReadWriteData(&writer_thread_data, &writer_data);
+  sem_post(&rw_data_mutex);
 }
+
+
 
 static void *ReaderThread(void *repeat_count) {
   int loops = *((int *) repeat_count);
@@ -63,9 +84,9 @@ static void *ReaderThread(void *repeat_count) {
 
   for (int i = 0; i < loops; i++) {
     clock_gettime(CLOCK_REALTIME, &start_time);
-    sem_wait(&thread_queue);//wait in thread queue
+//    sem_wait(&thread_queue);//wait in thread queue
     sem_wait(&r_count_mutex);//wait for access to r_count
-    sem_post(&thread_queue);
+//    sem_post(&thread_queue);
     //ENTERING r_count CRITICAL SECTION
     r_count++;
     if (r_count == 1)
@@ -83,7 +104,7 @@ static void *ReaderThread(void *repeat_count) {
     //EXITING r_count CRITICAL SECTION
     sem_post(&r_count_mutex);
     //sleep before trying to get access again
-    usleep((random() % 101) * 1000);
+//    usleep((random() % 101) * 1000);
   }
 }
 
@@ -111,6 +132,10 @@ int main(int argc, char *argv[]) {
   }
   if (sem_init(&thread_queue, 0, 1) == -1) {
     puts("Failed to initialize thread_queue");
+    exit(EXIT_FAILURE);
+  }
+  if (sem_init(&rw_data_mutex, 0, 1) == -1) {
+    puts("Failed to initialize rw_data_mutex");
     exit(EXIT_FAILURE);
   }
 
@@ -145,6 +170,7 @@ int main(int argc, char *argv[]) {
   sem_destroy(&global_mutex);
   sem_destroy(&r_count_mutex);
   sem_destroy(&thread_queue);
+  sem_destroy(&rw_data_mutex);
   printf("global: %d\n", global);
   printf("Readers: Min: %ld ns, Mean: %ld ns, Max: %ld ns\n",
          reader_data.min_wait_time, reader_data.sum_wait_time / reader_data.count_wait_time, reader_data.max_wait_time);
