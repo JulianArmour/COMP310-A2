@@ -13,11 +13,17 @@ typedef struct WaitTime {
     unsigned long count_wait_time;
 } WaitTime;
 
+//solves the fairness problem by revoking access from readers when a writer shows up on the queue
 static sem_t thread_queue;
+//lock for the variable global
 static sem_t global_mutex;
+//lock for the r_count variable
 static sem_t r_count_mutex;
-static sem_t rw_data_mutex;//for writer_data and reader_data
+//lock for writer_data and reader_data, when aggregating thread benchmark statistics
+static sem_t rw_data_mutex;
+//the resource for the readers-writers problem
 static int global = 0;
+//the number of reader threads currently reading global
 static int r_count = 0;
 // Only updated when global_mutex is locked in WriterThread()
 static WaitTime writer_data = {ULLONG_MAX, 0, 0, 0};
@@ -26,10 +32,12 @@ static WaitTime reader_data = {ULLONG_MAX, 0, 0, 0};
 
 // Used to update either global writer_data or reader_data with thread-specific data
 void UpdateGlobalReadWriteData(WaitTime *thread_data, WaitTime *global_data) {
+  // Update min and max times
   if (thread_data->min_wait_time < global_data->min_wait_time)
     global_data->min_wait_time = thread_data->min_wait_time;
   if (thread_data->max_wait_time > global_data->max_wait_time)
     global_data->max_wait_time = thread_data->max_wait_time;
+  // Update running sum of waiting times
   global_data->sum_wait_time += thread_data->sum_wait_time;
   global_data->count_wait_time += thread_data->count_wait_time;
 }
@@ -56,9 +64,9 @@ static void *WriterThread(void *repeat_count) {
 
   for (int i = 0; i < loops; i++) {
     clock_gettime(CLOCK_REALTIME, &start_time);
-//    sem_wait(&thread_queue);
+    sem_wait(&thread_queue);
     sem_wait(&global_mutex);//ENTERING global_mutex CRITICAL SECTION
-//    sem_post(&thread_queue);
+    sem_post(&thread_queue);
     global += 10;
     sem_post(&global_mutex);//EXITING global_mutex CRITICAL SECTION
 
@@ -74,8 +82,6 @@ static void *WriterThread(void *repeat_count) {
   sem_post(&rw_data_mutex);
 }
 
-
-
 static void *ReaderThread(void *repeat_count) {
   int loops = *((int *) repeat_count);
   struct timespec start_time;
@@ -85,19 +91,19 @@ static void *ReaderThread(void *repeat_count) {
 
   for (int i = 0; i < loops; i++) {
     clock_gettime(CLOCK_REALTIME, &start_time);
-//    sem_wait(&thread_queue);//wait in thread queue
+    sem_wait(&thread_queue);
     sem_wait(&r_count_mutex);//ENTERING r_count CRITICAL SECTION
-//    sem_post(&thread_queue);
+    sem_post(&thread_queue);
     r_count++;
     if (r_count == 1)
-      sem_wait(&global_mutex);//writer done, take lock and start reading
+      sem_wait(&global_mutex);//writer done, lock-out writers
     sem_post(&r_count_mutex);//EXITING r_count CRITICAL SECTION
     global;//read performed
     clock_gettime(CLOCK_REALTIME, &end_time);
     sem_wait(&r_count_mutex);//ENTERING r_count CRITICAL SECTION
     r_count--;
     if (r_count == 0) {
-      sem_post(&global_mutex);
+      sem_post(&global_mutex);//readers done, open lock for next writer
     }//readers done, give lock to a writer
     sem_post(&r_count_mutex);//EXITING r_count CRITICAL SECTION
 
@@ -122,8 +128,8 @@ int main(int argc, char *argv[]) {
     puts("Invalid number of arguments");
     exit(EXIT_FAILURE);
   }
-  read_loops = atoi(argv[1]);
-  write_loops = atoi(argv[2]);
+  write_loops = atoi(argv[1]);
+  read_loops = atoi(argv[2]);
 
   //initialize semaphores
   if (sem_init(&global_mutex, 0, 1) == -1) {
@@ -158,23 +164,26 @@ int main(int argc, char *argv[]) {
     }
   }
 
+  //join readers
+    for (int i = 0; i < 500; ++i) {
+      if (pthread_join(readers[i], NULL) != 0) {
+        puts("Error joining readers");
+      }
+    }
   //join writers
   for (int i = 0; i < 10; ++i) {
     if (pthread_join(writers[i], NULL) != 0) {
       puts("Error joining writers");
     }
   }
-  //join readers
-  for (int i = 0; i < 500; ++i) {
-    if (pthread_join(readers[i], NULL) != 0) {
-      puts("Error joining readers");
-    }
-  }
+
   //destroy semaphores
   sem_destroy(&global_mutex);
   sem_destroy(&r_count_mutex);
   sem_destroy(&thread_queue);
   sem_destroy(&rw_data_mutex);
+
+  //program output
   printf("global: %d\n", global);
   printf("Readers: Min: %ld ns, Mean: %ld ns, Max: %ld ns\n",
          reader_data.min_wait_time, reader_data.sum_wait_time / reader_data.count_wait_time, reader_data.max_wait_time);
@@ -182,4 +191,3 @@ int main(int argc, char *argv[]) {
          writer_data.min_wait_time, writer_data.sum_wait_time / writer_data.count_wait_time, writer_data.max_wait_time);
   return 0;
 }
-
