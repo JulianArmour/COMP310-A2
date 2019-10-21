@@ -13,8 +13,6 @@ typedef struct WaitTime {
     unsigned long count_wait_time;
 } WaitTime;
 
-//solves the fairness problem by revoking access from readers when a writer shows up on the queue
-static sem_t thread_queue;
 //lock for the variable global
 static sem_t global_mutex;
 //lock for the r_count variable
@@ -64,9 +62,7 @@ static void *WriterThread(void *repeat_count) {
 
   for (int i = 0; i < loops; i++) {
     clock_gettime(CLOCK_REALTIME, &start_time);
-    sem_wait(&thread_queue);
     sem_wait(&global_mutex);//ENTERING global_mutex CRITICAL SECTION
-    sem_post(&thread_queue);
     global += 10;
     sem_post(&global_mutex);//EXITING global_mutex CRITICAL SECTION
 
@@ -91,9 +87,7 @@ static void *ReaderThread(void *repeat_count) {
 
   for (int i = 0; i < loops; i++) {
     clock_gettime(CLOCK_REALTIME, &start_time);
-    sem_wait(&thread_queue);
     sem_wait(&r_count_mutex);//ENTERING r_count CRITICAL SECTION
-    sem_post(&thread_queue);
     r_count++;
     if (r_count == 1)
       sem_wait(&global_mutex);//writer done, lock-out writers
@@ -140,10 +134,6 @@ int main(int argc, char *argv[]) {
     puts("Failed to initialize r_count_mutex");
     exit(EXIT_FAILURE);
   }
-  if (sem_init(&thread_queue, 0, 1) == -1) {
-    puts("Failed to initialize thread_queue");
-    exit(EXIT_FAILURE);
-  }
   if (sem_init(&rw_data_mutex, 0, 1) == -1) {
     puts("Failed to initialize rw_data_mutex");
     exit(EXIT_FAILURE);
@@ -182,7 +172,6 @@ int main(int argc, char *argv[]) {
   //destroy semaphores
   sem_destroy(&global_mutex);
   sem_destroy(&r_count_mutex);
-  sem_destroy(&thread_queue);
   sem_destroy(&rw_data_mutex);
 
   //program output
