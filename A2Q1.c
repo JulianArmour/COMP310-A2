@@ -65,7 +65,6 @@ static void *WriterThread(void *repeat_count) {
     sem_wait(&global_mutex);//ENTERING global_mutex CRITICAL SECTION
     global += 10;
     sem_post(&global_mutex);//EXITING global_mutex CRITICAL SECTION
-
     //update this thread's data with this loop's wait time
     clock_gettime(CLOCK_REALTIME, &end_time);
     UpdateWaitTimeData(&start_time, &end_time, &writer_thread_data);
@@ -100,7 +99,6 @@ static void *ReaderThread(void *repeat_count) {
       sem_post(&global_mutex);//readers done, open lock for next writer
     }//readers done, give lock to a writer
     sem_post(&r_count_mutex);//EXITING r_count CRITICAL SECTION
-
     //update this thread's data with this loop's wait time
     UpdateWaitTimeData(&start_time, &end_time, &reader_thread_data);
     //sleep before trying to get access again

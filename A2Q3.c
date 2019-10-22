@@ -64,12 +64,11 @@ static void *WriterThread(void *repeat_count) {
 
   for (int i = 0; i < loops; i++) {
     clock_gettime(CLOCK_REALTIME, &start_time);
-    sem_wait(&thread_queue);
+    sem_wait(&thread_queue);//enter thread queue
     sem_wait(&global_mutex);//ENTERING global_mutex CRITICAL SECTION
-    sem_post(&thread_queue);
+    sem_post(&thread_queue);//exit thread queue
     global += 10;
     sem_post(&global_mutex);//EXITING global_mutex CRITICAL SECTION
-
     //update this thread's data with this loop's wait time
     clock_gettime(CLOCK_REALTIME, &end_time);
     UpdateWaitTimeData(&start_time, &end_time, &writer_thread_data);
@@ -91,9 +90,9 @@ static void *ReaderThread(void *repeat_count) {
 
   for (int i = 0; i < loops; i++) {
     clock_gettime(CLOCK_REALTIME, &start_time);
-    sem_wait(&thread_queue);
+    sem_wait(&thread_queue);//enter thread queue
     sem_wait(&r_count_mutex);//ENTERING r_count CRITICAL SECTION
-    sem_post(&thread_queue);
+    sem_post(&thread_queue);//exit thread queue
     r_count++;
     if (r_count == 1)
       sem_wait(&global_mutex);//writer done, lock-out writers
@@ -104,9 +103,8 @@ static void *ReaderThread(void *repeat_count) {
     r_count--;
     if (r_count == 0) {
       sem_post(&global_mutex);//readers done, open lock for next writer
-    }//readers done, give lock to a writer
+    }
     sem_post(&r_count_mutex);//EXITING r_count CRITICAL SECTION
-
     //update this thread's data with this loop's wait time
     UpdateWaitTimeData(&start_time, &end_time, &reader_thread_data);
     //sleep before trying to get access again
@@ -118,6 +116,8 @@ static void *ReaderThread(void *repeat_count) {
   sem_post(&rw_data_mutex);
 }
 
+//the following resources was consulting when trying to find a solution to the starvation problem:
+//https://rfc1149.net/blog/2011/01/07/the-third-readers-writers-problem/
 int main(int argc, char *argv[]) {
   pthread_t readers[500];
   pthread_t writers[10];
